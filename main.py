@@ -123,13 +123,9 @@ def get_width() -> int:
     return max(shutil.get_terminal_size().columns, 60)
 
 
-def log_line(left: str, right: str = "") -> str:
-    """Format a log line with optional right-aligned content."""
-    width = get_width()
-    if right:
-        padding = width - len(left) - len(right)
-        return left + " " * max(padding, 1) + right
-    return left
+def log_line(text: str) -> str:
+    """Format a log line."""
+    return text
 
 
 def log_delay(heavy: bool = False):
@@ -142,10 +138,10 @@ def log_delay(heavy: bool = False):
     time.sleep(max(0.01, base + jitter))
 
 
-def print_log(left: str, right: str = "", heavy: bool = False):
+def print_log(text: str, heavy: bool = False):
     """Print a log line with delay."""
     log_delay(heavy)
-    print(log_line(left, right))
+    print(text)
 
 
 def timestamp() -> str:
@@ -229,34 +225,84 @@ class Game:
         self.player = player
         self.round = 0
         self.running = True
+        self.auto_bet = 0  # 0 = manual mode
     
     def print_header(self):
         print_log(f"[{timestamp()}] DICE_ANALYZER v{VERSION} | SESSION {SESSION_ID} | ROUND {self.round:03d}")
     
     def print_status(self, pot: int = 0):
-        left = f"[STATUS] BANKROLL: {self.player.bankroll:,}"
-        right = f"POT: {pot:,}" if pot else ""
-        print_log(left, right)
+        line = f"[STATUS] BANKROLL: {self.player.bankroll:,}"
+        if pot:
+            line += f" | POT: {pot:,}"
+        print_log(line)
     
     def get_bet(self) -> int:
-        """Get bet amount from player."""
-        while True:
-            log_delay(heavy=True)
-            sys.stdout.write(f"[INPUT] BET_AMOUNT (1-{self.player.bankroll:,}) > ")
+        """Get bet amount from player. Returns 0 to quit."""
+        log_delay(heavy=True)
+        
+        # Auto mode
+        if self.auto_bet > 0:
+            bet = min(self.auto_bet, self.player.bankroll)
+            sys.stdout.write(f"[INPUT] BET_AMOUNT AUTO: {bet:,} (ENTER to interrupt) > ")
             sys.stdout.flush()
-            try:
-                bet = self.player.get_bet_input()
-                if bet == 0:
-                    return 0  # Signal to quit
-                if 1 <= bet <= self.player.bankroll:
-                    return bet
-                print_log("[ERROR] INVALID_AMOUNT: OUT_OF_RANGE")
-            except ValueError:
-                print_log("[ERROR] INVALID_AMOUNT: NOT_A_NUMBER")
+            
+            # Wait 2 seconds for interrupt
+            import select
+            if select.select([sys.stdin], [], [], 2.0)[0]:
+                line = sys.stdin.readline().strip()
+                # Any input (including just Enter) interrupts auto mode
+                self.auto_bet = 0
+                print_log("[INFO] AUTO_MODE_DISABLED")
+                if line:
+                    return self._parse_bet_input(line)
+                # Empty enter = go to manual input
+                sys.stdout.write(f"[INPUT] BET_AMOUNT (1-{self.player.bankroll:,}) > ")
+                sys.stdout.flush()
+                line = input().strip()
+                return self._parse_bet_input(line)
+            print()  # Newline after timeout
+            return bet
+        
+        # Manual mode
+        sys.stdout.write(f"[INPUT] BET_AMOUNT (1-{self.player.bankroll:,}) > ")
+        sys.stdout.flush()
+        line = input().strip()
+        return self._parse_bet_input(line)
     
-    def confirm(self, prompt: str = "CONFIRM") -> bool:
-        """Get Y/n confirmation."""
-        sys.stdout.write(f"[INPUT] {prompt} [Y/n] > ")
+    def _parse_bet_input(self, line: str) -> int:
+        """Parse bet input. Returns bet amount, 0 for quit, -1 for invalid."""
+        line = line.lower().strip()
+        
+        if line in ('q', 'quit', 'exit', '0'):
+            return 0
+        
+        # Check for auto mode
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == 'auto':
+            try:
+                bet = int(parts[0].replace(',', ''))
+                if 1 <= bet <= self.player.bankroll:
+                    self.auto_bet = bet
+                    print_log(f"[INFO] AUTO_MODE_ENABLED: {bet:,}")
+                    return bet
+            except ValueError:
+                pass
+            return -1
+        
+        # Normal bet
+        try:
+            bet = int(line.replace(',', ''))
+            if 1 <= bet <= self.player.bankroll:
+                return bet
+            print_log("[ERROR] INVALID_AMOUNT: OUT_OF_RANGE")
+            return -1
+        except ValueError:
+            print_log("[ERROR] INVALID_AMOUNT: NOT_A_NUMBER")
+            return -1
+    
+    def _confirm_quit(self) -> bool:
+        """Confirm quit. Returns True if user wants to quit."""
+        sys.stdout.write("[INPUT] QUIT_SESSION [Y/n] > ")
         sys.stdout.flush()
         response = input().strip().lower()
         return response != 'n'
@@ -336,9 +382,11 @@ class Game:
         
         # Get bet
         bet = self.get_bet()
+        while bet == -1:  # Invalid input, retry
+            bet = self.get_bet()
+        
         if bet == 0:
-            if not self.confirm("PLACE_BET"):
-                print_log("[INFO] BET_CANCELLED")
+            if not self._confirm_quit():
                 return
             print_log("[INFO] SESSION_TERMINATED_BY_USER")
             self.running = False
@@ -353,18 +401,18 @@ class Game:
         if player_result is None:
             # No valid roll - lose bet
             payout = -bet
-            print_log(f"[RESULT] NO_VALID_COMBINATION", f"DEBIT: {payout:,}")
+            print_log(f"[RESULT] NO_VALID_COMBINATION | DEBIT: {payout:,}")
         elif player_result.role == DiceResult.HIFUMI:
             # Auto lose
             payout = -bet * abs(player_result.multiplier)
-            print_log(f"[RESULT] {format_result(player_result)}", f"DEBIT: {payout:,}")
+            print_log(f"[RESULT] {format_result(player_result)} | DEBIT: {payout:,}")
         elif player_result.role in (DiceResult.SHIGORO, DiceResult.PINZORO, DiceResult.ARASHI):
             # Auto win
             payout = bet * player_result.multiplier
-            print_log(f"[RESULT] {format_result(player_result)}", f"CREDIT: +{payout:,}")
+            print_log(f"[RESULT] {format_result(player_result)} | CREDIT: +{payout:,}")
         else:
             # Need dealer roll
-            print_log(f"[RESULT] {format_result(player_result)}", "AWAIT_DEALER")
+            print_log(f"[RESULT] {format_result(player_result)} | AWAIT_DEALER")
             dealer_result = self.dealer_roll()
             
             if dealer_result:
@@ -373,11 +421,11 @@ class Game:
             payout = self.resolve_round(player_result, dealer_result, bet)
             
             if payout > 0:
-                print_log(f"[TRANSACTION] PLAYER_WIN", f"CREDIT: +{payout:,}")
+                print_log(f"[TRANSACTION] PLAYER_WIN | CREDIT: +{payout:,}")
             elif payout < 0:
-                print_log(f"[TRANSACTION] DEALER_WIN", f"DEBIT: {payout:,}")
+                print_log(f"[TRANSACTION] DEALER_WIN | DEBIT: {payout:,}")
             else:
-                print_log(f"[TRANSACTION] DRAW", "NO_CHANGE")
+                print_log(f"[TRANSACTION] DRAW | NO_CHANGE")
         
         # Update bankroll
         self.player.bankroll += payout
@@ -388,17 +436,13 @@ class Game:
             print_log("[FATAL] BANKROLL_DEPLETED | SESSION_TERMINATED")
             self.running = False
             return
-        
-        # Wait for continue
-        log_delay(heavy=True)
-        input("[AWAIT] > ")
     
     def run(self):
         """Main game loop."""
         print_log(f"[{timestamp()}] DICE_ANALYZER v{VERSION} INITIALIZED")
         print_log(f"[INFO] SESSION_ID: {SESSION_ID}")
         print_log(f"[INFO] INITIAL_BANKROLL: {self.player.bankroll:,}")
-        print_log("[INFO] ENTER '0' AS BET_AMOUNT TO EXIT")
+        print_log("[INFO] COMMANDS: <amount> | <amount> auto | 0/q to quit")
         
         while self.running:
             self.play_round()
