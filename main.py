@@ -447,13 +447,18 @@ class Game:
             
             payout = self.resolve_round(player_result, dealer_result, bet)
             
-            if payout > 0:
+            if dealer_result and dealer_result.role == DiceResult.HIFUMI:
+                # Dealer Hifumi - player wins 2x regardless of their roll
+                print_log(f"[RESULT] DEALER_HIFUMI x2 | CREDIT: +{payout:,}")
+            elif dealer_result is None:
+                # Dealer couldn't make valid roll
+                print_log(f"[RESULT] DEALER_MENASHI | CREDIT: +{payout:,}")
+            elif payout > 0:
+                # Player wins by comparison
                 print_log(f"[RESULT] {format_result(player_result)} WIN | CREDIT: +{payout:,}")
             elif payout < 0:
-                if dealer_result:
-                    print_log(f"[RESULT] {format_result(dealer_result)} DEALER_WIN | DEBIT: {payout:,}")
-                else:
-                    print_log(f"[RESULT] DEALER_MENASHI | CREDIT: +{payout:,}")
+                # Dealer wins
+                print_log(f"[RESULT] {format_result(dealer_result)} DEALER_WIN | DEBIT: {payout:,}")
             else:
                 print_log(f"[RESULT] DRAW | NO_CHANGE")
         
