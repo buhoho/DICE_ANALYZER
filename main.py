@@ -6,7 +6,6 @@ A totally legitimate business analytics tool.
 
 import random
 import time
-import shutil
 import sys
 from datetime import datetime
 from player import Player, HumanPlayer, CPUPlayer
@@ -23,11 +22,14 @@ VERSION = "2.1.3"
 DELAY_BASE = 0.08
 DELAY_JITTER = (-0.03, 0.05)
 DELAY_HEAVY = (0.2, 0.4)
+DELAY_MICRO = (0.1, 0.2)  # 値表示前の微ディレイ
 DELAY_DICE_CONFIRM = 0.3
 DELAY_DICE_LAST_NORMAL = 0.5
 DELAY_DICE_LAST_TENSE = (1.5, 2.5)
 DELAY_DICE_SPIN_INTERVAL = 0.05
 DELAY_DICE_SPIN_DURATION = 1.0
+DELAY_RESULT_SHOW = 0.23  # ダイス確定後、結果表示までの間
+DELAY_ROUND_END = 1.0  # ラウンド終了後の視認用ディレイ
 
 # =============================================================================
 # DICE LOGIC
@@ -92,23 +94,27 @@ def roll_dice() -> list[int]:
     return [random.randint(1, 6) for _ in range(3)]
 
 
-def is_tense_situation(confirmed: list[int], pending: int) -> bool:
+def is_tense_situation(dice_so_far: list[int], is_last_reroll: bool = False) -> bool:
     """Check if the current situation is tense (potential good/bad role)."""
-    if len(confirmed) < 2:
+    # 3/3の最後のリロールは常に緊張
+    if is_last_reroll:
+        return True
+    
+    if len(dice_so_far) < 2:
         return False
     
-    c = sorted(confirmed)
+    d0, d1 = dice_so_far[0], dice_so_far[1]
     
-    # Potential Arashi
-    if c[0] == c[1]:
+    # Potential Arashi (ゾロ目リーチ)
+    if d0 == d1:
         return True
     
-    # Potential Shigoro
-    if set(c).issubset({4, 5, 6}):
+    # Potential Shigoro (4,5,6のうち2つ)
+    if {d0, d1}.issubset({4, 5, 6}):
         return True
     
-    # Potential Hifumi
-    if set(c).issubset({1, 2, 3}):
+    # Potential Hifumi (1,2,3のうち2つ)
+    if {d0, d1}.issubset({1, 2, 3}):
         return True
     
     return False
@@ -117,16 +123,6 @@ def is_tense_situation(confirmed: list[int], pending: int) -> bool:
 # =============================================================================
 # DISPLAY
 # =============================================================================
-
-def get_width() -> int:
-    """Get terminal width, minimum 60."""
-    return max(shutil.get_terminal_size().columns, 60)
-
-
-def log_line(text: str) -> str:
-    """Format a log line."""
-    return text
-
 
 def log_delay(heavy: bool = False):
     """Sleep with jitter for realistic log feel."""
@@ -149,29 +145,29 @@ def timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def animate_dice_roll(final_dice: list[int]) -> None:
+def animate_dice_roll(final_dice: list[int], prefix: str = "[PROC] ROLLING... ", is_last_reroll: bool = False) -> None:
     """Animate the dice roll with progressive reveal."""
-    width = get_width()
-    prefix = "[PROC] ROLLING... "
     
     # Phase 1: All spinning
     end_time = time.time() + DELAY_DICE_SPIN_DURATION
     while time.time() < end_time:
         display = [f"{random.randint(1,6):02d}" for _ in range(3)]
         line = f"{prefix}[{display[0]} {display[1]} {display[2]}]"
-        sys.stdout.write(f"\r{line:<{width}}")
+        sys.stdout.write(f"\r{line}")
         sys.stdout.flush()
         time.sleep(DELAY_DICE_SPIN_INTERVAL)
     
     # Phase 2: Reveal one by one
-    confirmed = []
+    confirmed_vals = []
+    confirmed_strs = []
     for i, val in enumerate(final_dice):
-        confirmed.append(f"{val:02d}")
-        remaining = 3 - len(confirmed)
+        confirmed_vals.append(val)
+        confirmed_strs.append(f"{val:02d}")
+        remaining = 3 - len(confirmed_strs)
         
         # Determine delay for this confirmation
         if i == 2:  # Last dice
-            if is_tense_situation(final_dice[:2], final_dice[2]):
+            if is_tense_situation(confirmed_vals[:2], is_last_reroll):
                 delay = random.uniform(*DELAY_DICE_LAST_TENSE)
             else:
                 delay = DELAY_DICE_LAST_NORMAL
@@ -182,38 +178,46 @@ def animate_dice_roll(final_dice: list[int]) -> None:
         end_time = time.time() + delay
         while time.time() < end_time:
             spinning = [f"{random.randint(1,6):02d}" for _ in range(remaining)]
-            all_dice = confirmed + spinning
+            all_dice = confirmed_strs + spinning
             line = f"{prefix}[{all_dice[0]} {all_dice[1]} {all_dice[2]}]"
-            sys.stdout.write(f"\r{line:<{width}}")
+            sys.stdout.write(f"\r{line}")
             sys.stdout.flush()
             time.sleep(DELAY_DICE_SPIN_INTERVAL)
         
         # Show confirmed state
         spinning = ["##" for _ in range(remaining)]
-        all_dice = confirmed + spinning
+        all_dice = confirmed_strs + spinning
         line = f"{prefix}[{all_dice[0]} {all_dice[1]} {all_dice[2]}]"
-        sys.stdout.write(f"\r{line:<{width}}")
+        sys.stdout.write(f"\r{line}")
         sys.stdout.flush()
     
-    print()  # Newline after animation
+    # Don't print newline here - let caller handle the rest of the line
 
 
-def format_result(result: DiceResult) -> str:
+def format_result(result: DiceResult, include_dice: bool = True) -> str:
     """Format dice result for display."""
     d = result.dice
-    dice_str = f"{d[0]}-{d[1]}-{d[2]}"
+    dice_str = f"{d[0]}-{d[1]}-{d[2]}" if include_dice else ""
     
     if result.role == DiceResult.MENASHI:
-        return f"{dice_str} {result.role}"
+        return f"{dice_str} {result.role}".strip()
     
     mult_str = f"x{abs(result.multiplier)}"
     
-    if result.multiplier < 0:
-        return f"{dice_str} {result.role} {mult_str} LOSS"
-    elif result.role in (DiceResult.SHIGORO, DiceResult.PINZORO, DiceResult.ARASHI):
-        return f"{dice_str} {result.role} {mult_str} WIN"
+    if result.role == DiceResult.ME:
+        role_str = f"ME:{result.value}"
     else:
-        return f"{dice_str} {result.role}:{result.value} {mult_str}"
+        role_str = result.role
+    
+    if result.multiplier < 0:
+        status = "LOSS"
+    elif result.role in (DiceResult.SHIGORO, DiceResult.PINZORO, DiceResult.ARASHI):
+        status = "WIN"
+    else:
+        status = ""
+    
+    parts = [dice_str, role_str, mult_str, status]
+    return " ".join(p for p in parts if p)
 
 
 # =============================================================================
@@ -231,10 +235,19 @@ class Game:
         print_log(f"[{timestamp()}] DICE_ANALYZER v{VERSION} | SESSION {SESSION_ID} | ROUND {self.round:03d}")
     
     def print_status(self, pot: int = 0):
-        line = f"[STATUS] BANKROLL: {self.player.bankroll:,}"
+        sys.stdout.write("[STATUS] BANKROLL:")
+        sys.stdout.flush()
+        time.sleep(random.uniform(*DELAY_MICRO))
+        sys.stdout.write(f" {self.player.bankroll:,}")
+        sys.stdout.flush()
         if pot:
-            line += f" | POT: {pot:,}"
-        print_log(line)
+            sys.stdout.write(" | POT:")
+            sys.stdout.flush()
+            time.sleep(random.uniform(*DELAY_MICRO))
+            sys.stdout.write(f" {pot:,}")
+            sys.stdout.flush()
+        print()
+        log_delay()
     
     def get_bet(self) -> int:
         """Get bet amount from player. Returns 0 to quit."""
@@ -311,32 +324,47 @@ class Game:
         """Roll for player with up to max_attempts."""
         for attempt in range(max_attempts):
             dice = roll_dice()
-            animate_dice_roll(dice)
+            is_last = (attempt == max_attempts - 1)
+            animate_dice_roll(dice, "[PROC_PLY] ROLLING... ", is_last_reroll=is_last)
             result = DiceResult(dice)
             
             if result.is_valid():
+                # 役あり - 同じ行に結果表示
+                time.sleep(DELAY_RESULT_SHOW)
+                print(f" | [RESLT] {format_result(result, include_dice=False)}")
                 return result
             
-            if attempt < max_attempts - 1:
-                print_log(f"[RESULT] {format_result(result)} | REROLL {attempt + 2}/{max_attempts}")
+            if is_last:
+                # 3/3で目なし確定
+                time.sleep(DELAY_RESULT_SHOW)
+                print(f" | [RESLT] MENASHI")
             else:
-                print_log(f"[RESULT] {format_result(result)} | NO_VALID_ROLL")
+                # まだリロールあり - 改行のみ
+                print()
         
         return None
     
     def dealer_roll(self, max_attempts: int = 3) -> DiceResult | None:
         """Roll for dealer."""
-        print_log("[PROC] DEALER_ROLL_SEQUENCE", heavy=True)
         for attempt in range(max_attempts):
             dice = roll_dice()
-            animate_dice_roll(dice)
+            is_last = (attempt == max_attempts - 1)
+            animate_dice_roll(dice, "[PROC_DLR] ROLLING... ", is_last_reroll=is_last)
             result = DiceResult(dice)
             
             if result.is_valid():
+                # 役あり - 同じ行に結果表示
+                time.sleep(DELAY_RESULT_SHOW)
+                print(f" | [RESLT] {format_result(result, include_dice=False)}")
                 return result
             
-            if attempt < max_attempts - 1:
-                print_log(f"[DEALER] {format_result(result)} | REROLL {attempt + 2}/{max_attempts}")
+            if is_last:
+                # 3/3で目なし確定
+                time.sleep(DELAY_RESULT_SHOW)
+                print(f" | [RESLT] MENASHI")
+            else:
+                # まだリロールあり - 改行のみ
+                print()
         
         return None
     
@@ -395,13 +423,12 @@ class Game:
         self.print_status(pot=bet)
         
         # Player roll
-        print_log("[PROC] PLAYER_ROLL_SEQUENCE", heavy=True)
         player_result = self.player_roll()
         
         if player_result is None:
             # No valid roll - lose bet
             payout = -bet
-            print_log(f"[RESULT] NO_VALID_COMBINATION | DEBIT: {payout:,}")
+            print_log(f"[RESULT] NO_VALID_ROLL | DEBIT: {payout:,}")
         elif player_result.role == DiceResult.HIFUMI:
             # Auto lose
             payout = -bet * abs(player_result.multiplier)
@@ -412,24 +439,27 @@ class Game:
             print_log(f"[RESULT] {format_result(player_result)} | CREDIT: +{payout:,}")
         else:
             # Need dealer roll
-            print_log(f"[RESULT] {format_result(player_result)} | AWAIT_DEALER")
+            log_delay(heavy=True)
             dealer_result = self.dealer_roll()
-            
-            if dealer_result:
-                print_log(f"[DEALER] {format_result(dealer_result)}")
             
             payout = self.resolve_round(player_result, dealer_result, bet)
             
             if payout > 0:
-                print_log(f"[TRANSACTION] PLAYER_WIN | CREDIT: +{payout:,}")
+                print_log(f"[RESULT] {format_result(player_result)} WIN | CREDIT: +{payout:,}")
             elif payout < 0:
-                print_log(f"[TRANSACTION] DEALER_WIN | DEBIT: {payout:,}")
+                if dealer_result:
+                    print_log(f"[RESULT] {format_result(dealer_result)} DEALER_WIN | DEBIT: {payout:,}")
+                else:
+                    print_log(f"[RESULT] DEALER_MENASHI | CREDIT: +{payout:,}")
             else:
-                print_log(f"[TRANSACTION] DRAW | NO_CHANGE")
+                print_log(f"[RESULT] DRAW | NO_CHANGE")
         
         # Update bankroll
         self.player.bankroll += payout
         self.print_status()
+        
+        # Round end delay for result visibility
+        time.sleep(DELAY_ROUND_END)
         
         # Check bankruptcy
         if self.player.bankroll <= 0:
