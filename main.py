@@ -28,7 +28,7 @@ DELAY_DICE_LAST_NORMAL = 0.5
 DELAY_DICE_LAST_TENSE = (1.5, 2.5)
 DELAY_DICE_SPIN_INTERVAL = 0.05
 DELAY_DICE_SPIN_DURATION = 1.0
-DELAY_RESULT_SHOW = 0.23  # ダイス確定後、結果表示までの間
+DELAY_RESULT_SHOW = 0.6  # ダイス確定後、結果表示までの間
 DELAY_ROUND_END = 1.0  # ラウンド終了後の視認用ディレイ
 
 # =============================================================================
@@ -161,11 +161,9 @@ def animate_dice_roll(final_dice: list[int], prefix: str = "[PROC] ROLLING... ",
     confirmed_vals = []
     confirmed_strs = []
     for i, val in enumerate(final_dice):
-        confirmed_vals.append(val)
-        confirmed_strs.append(f"{val:02d}")
-        remaining = 3 - len(confirmed_strs)
+        remaining_before = 3 - len(confirmed_strs)
         
-        # Determine delay for this confirmation
+        # Determine delay for this confirmation (before revealing)
         if i == 2:  # Last dice
             if is_tense_situation(confirmed_vals[:2], is_last_reroll):
                 delay = random.uniform(*DELAY_DICE_LAST_TENSE)
@@ -174,18 +172,23 @@ def animate_dice_roll(final_dice: list[int], prefix: str = "[PROC] ROLLING... ",
         else:
             delay = DELAY_DICE_CONFIRM
         
-        # Spin remaining dice during delay
+        # Spin remaining dice during delay (BEFORE confirming this dice)
         end_time = time.time() + delay
         while time.time() < end_time:
-            spinning = [f"{random.randint(1,6):02d}" for _ in range(remaining)]
+            spinning = [f"{random.randint(1,6):02d}" for _ in range(remaining_before)]
             all_dice = confirmed_strs + spinning
             line = f"{prefix}[{all_dice[0]} {all_dice[1]} {all_dice[2]}]"
             sys.stdout.write(f"\r{line}")
             sys.stdout.flush()
             time.sleep(DELAY_DICE_SPIN_INTERVAL)
         
+        # NOW confirm this dice
+        confirmed_vals.append(val)
+        confirmed_strs.append(f"{val:02d}")
+        remaining_after = 3 - len(confirmed_strs)
+        
         # Show confirmed state
-        spinning = ["##" for _ in range(remaining)]
+        spinning = ["##" for _ in range(remaining_after)]
         all_dice = confirmed_strs + spinning
         line = f"{prefix}[{all_dice[0]} {all_dice[1]} {all_dice[2]}]"
         sys.stdout.write(f"\r{line}")
@@ -383,9 +386,9 @@ class Game:
         if dealer_result is None:
             return bet * player_result.multiplier
         
-        # Dealer has auto-lose
+        # Dealer has auto-lose (Hifumi) - pays 2x to player
         if dealer_result.role == DiceResult.HIFUMI:
-            return bet * player_result.multiplier
+            return bet * 2
         
         # Dealer has auto-win
         if dealer_result.role in (DiceResult.SHIGORO, DiceResult.PINZORO, DiceResult.ARASHI):
