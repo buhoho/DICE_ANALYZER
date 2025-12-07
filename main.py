@@ -197,7 +197,7 @@ def animate_dice_roll(final_dice: list[int], prefix: str = "[PROC] ROLLING... ",
     # Don't print newline here - let caller handle the rest of the line
 
 
-def format_result(result: DiceResult, include_dice: bool = True) -> str:
+def format_result(result: DiceResult, include_dice: bool = True, include_status: bool = True) -> str:
     """Format dice result for display."""
     d = result.dice
     dice_str = f"{d[0]}-{d[1]}-{d[2]}" if include_dice else ""
@@ -212,7 +212,9 @@ def format_result(result: DiceResult, include_dice: bool = True) -> str:
     else:
         role_str = result.role
     
-    if result.multiplier < 0:
+    if not include_status:
+        status = ""
+    elif result.multiplier < 0:
         status = "LOSS"
     elif result.role in (DiceResult.SHIGORO, DiceResult.PINZORO, DiceResult.ARASHI):
         status = "WIN"
@@ -447,18 +449,19 @@ class Game:
             
             payout = self.resolve_round(player_result, dealer_result, bet)
             
+            # Display rule: show the role that determined the multiplier
             if dealer_result and dealer_result.role == DiceResult.HIFUMI:
-                # Dealer Hifumi - player wins 2x regardless of their roll
+                # Dealer Hifumi determined x2
                 print_log(f"[RESULT] DEALER_HIFUMI x2 | CREDIT: +{payout:,}")
-            elif dealer_result is None:
-                # Dealer couldn't make valid roll
-                print_log(f"[RESULT] DEALER_MENASHI | CREDIT: +{payout:,}")
+            elif dealer_result and dealer_result.role in (DiceResult.SHIGORO, DiceResult.PINZORO, DiceResult.ARASHI):
+                # Dealer's special role determined multiplier
+                print_log(f"[RESULT] DEALER_{dealer_result.role} x{dealer_result.multiplier} | DEBIT: {payout:,}")
             elif payout > 0:
-                # Player wins by comparison
+                # Player's role determined multiplier (win)
                 print_log(f"[RESULT] {format_result(player_result)} WIN | CREDIT: +{payout:,}")
             elif payout < 0:
-                # Dealer wins
-                print_log(f"[RESULT] {format_result(dealer_result)} DEALER_WIN | DEBIT: {payout:,}")
+                # Dealer's ME determined multiplier (loss by comparison)
+                print_log(f"[RESULT] DEALER_{format_result(dealer_result, include_dice=False)} | DEBIT: {payout:,}")
             else:
                 print_log(f"[RESULT] DRAW | NO_CHANGE")
         
